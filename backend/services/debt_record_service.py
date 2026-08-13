@@ -8,6 +8,8 @@ import calendar
 import math
 import logging
 
+from services.schema_checks import assert_debt_record_schema
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,6 +20,9 @@ class DebtRecordService:
     def close(self):
         if self.db:
             self.db.close()
+
+    def _ensure_schema(self):
+        assert_debt_record_schema(self.db.bind)
 
     # ──────────────────────────────────────────────────────────
     # DEBT RECORDS
@@ -467,6 +472,7 @@ class DebtRecordService:
 
     def get_debt_records(self, user_id: int, status: str = None) -> list:
         """Return all debt records for a user, optionally filtered by status."""
+        self._ensure_schema()
         q = self.db.query(DebtRecord).filter(DebtRecord.user_id == user_id)
         if status:
             try:
@@ -479,6 +485,7 @@ class DebtRecordService:
 
     def get_debt_records_with_projection(self, user_id: int, status: str = None) -> list:
         """Return debt records enriched with linked budget projection summary."""
+        self._ensure_schema()
         q = self.db.query(DebtRecord).filter(DebtRecord.user_id == user_id)
         if status:
             try:
@@ -554,6 +561,7 @@ class DebtRecordService:
 
     def create_debt_record(self, data: dict, user_id: int) -> dict:
         """Create a new debt record."""
+        self._ensure_schema()
         payload = self._normalize_installments(data)
         start_date = _parse_date(payload.get("start_date"))
         due_date = self._resolve_due_date(start_date, payload.get("due_date"))
@@ -583,11 +591,15 @@ class DebtRecordService:
         )
         if record.due_date is None and record.start_date is not None:
             record.due_date = self._add_months(record.start_date, 1)
-        self.db.add(record)
-        self.db.flush()
-        self._upsert_budget_projection(record)
-        self.db.commit()
-        self.db.refresh(record)
+        try:
+            self.db.add(record)
+            self.db.flush()
+            self._upsert_budget_projection(record)
+            self.db.commit()
+            self.db.refresh(record)
+        except Exception:
+            self.db.rollback()
+            raise
         logger.info(f"✅ DebtRecord created (id={record.id}) for user {user_id}")
         return self._record_to_dict(record)
 

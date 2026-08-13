@@ -7,7 +7,7 @@ Write-Host "🔨 Building SmartFI with automatic version..." -ForegroundColor Cy
 $commitHash = git log -1 --format=%h
 $env:COMMIT_HASH = $commitHash
 
-Write-Host "📌 Version: v1.0.0.$commitHash" -ForegroundColor Green
+Write-Host "📌 Version: v1.2.0.$commitHash" -ForegroundColor Green
 Write-Host ""
 
 # Build and start

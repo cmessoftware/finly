@@ -70,7 +70,7 @@ Estado sincronizado con Gitea (2026-06-01):
 | DBT-FEAT-012 | FEAT | media | DBT-FEAT-006 | TDB | ⏳ Todo | Dashboard unificado de deuda (CC + no CC) por origen, fuente, vencimiento y estado, sin mezclar fuentes canonicas. |
 | DBT-FEAT-013 | FEAT | media | | TDB | ✅ Done | Junto al resumen del periodo TC muestra comisiones acumuladas de extracciones en efectivo (`cash_advance_commission_total` en API + UI en CreditCardManager). |
 | DBT-FEAT-014 | FEAT | baja | | TDB | ✅ Done | Spinner de carga en tabla de deudas (`DebtManager` modo debts) |
-| DBT-FEAT-015 | FEAT | Alta | | TDB | ✅ Done | IVA sobre intereses configurable en alta/edición de deuda (default 21%); impacta monto de cuota proyectada en Presupuesto. |
+| DBT-FEAT-015 | FEAT | Alta | | TDB | ⏳ In Testing | IVA sobre intereses configurable en alta/edición de deuda (default 21%); impacta monto de cuota proyectada en Presupuesto. |
 
 ### Analisis de coherencia (DBT-FEAT-004 a DBT-FEAT-008)
 

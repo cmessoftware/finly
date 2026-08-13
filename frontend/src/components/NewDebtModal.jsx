@@ -190,7 +190,8 @@ export default function NewDebtModal({ isOpen, onClose, onSuccess, yearMonth, on
       onSuccess(created);
       onClose();
     } catch (error) {
-      toast.error('Error al crear deuda');
+      const detail = error?.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : 'Error al crear deuda');
       console.error('Error creating debt:', error);
     } finally {
       setLoading(false);
