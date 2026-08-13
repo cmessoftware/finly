@@ -64,7 +64,11 @@ def upgrade() -> None:
         )
 
     fk_names = {fk['name'] for fk in inspector.get_foreign_keys('credit_card_purchases')}
-    if 'fk_cc_purchase_derived_debt' not in fk_names:
+    has_derived_debt_fk = any(
+        'derived_debt_id' in (fk.get('constrained_columns') or [])
+        for fk in inspector.get_foreign_keys('credit_card_purchases')
+    )
+    if 'fk_cc_purchase_derived_debt' not in fk_names and not has_derived_debt_fk:
         op.create_foreign_key(
             'fk_cc_purchase_derived_debt',
             'credit_card_purchases',

@@ -8,7 +8,7 @@ echo "🔨 Building SmartFI with automatic version..."
 COMMIT_HASH=$(git log -1 --format=%h)
 export COMMIT_HASH
 
-echo "📌 Version: v1.0.0.$COMMIT_HASH"
+echo "📌 Version: v1.2.0.$COMMIT_HASH"
 echo ""
 
 # Build and start

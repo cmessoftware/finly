@@ -94,7 +94,7 @@ Render automáticamente inyecta la variable de entorno `RENDER_GIT_COMMIT` duran
 
 Después del deploy, verifica la versión en:
 - Esquina superior izquierda del sidebar
-- Debe mostrar: `v1.0.0.xxxxx` donde `xxxxx` coincide con tu último commit
+- Debe mostrar: `v1.2.0.xxxxx` donde `xxxxx` coincide con tu último commit
 
 ```powershell
 # Ver tu commit actual

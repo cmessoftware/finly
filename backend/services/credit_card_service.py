@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, date
 from dateutil.relativedelta import relativedelta
 import logging
 
+from services.schema_checks import assert_credit_card_purchase_schema
+
 logger = logging.getLogger(__name__)
 
 class CreditCardService:
@@ -1567,6 +1569,7 @@ class CreditCardService:
         """Get total credit card purchases for a specific month across all cards.
         Only counts purchases NOT already linked to a transaction (to avoid double-counting)."""
         try:
+            assert_credit_card_purchase_schema(self.db.bind)
             from sqlalchemy import extract, func
 
             base_filters = [

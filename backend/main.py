@@ -116,6 +116,8 @@ async def health_check():
     return {
         "status": "ok",
         "database_connected": database_service is not None and database_service.is_connected(),
+        "db_revision": _get_alembic_revision(),
+        "db_schema": _get_schema_status(),
         "google_sheets_connected": sheets_service is not None and sheets_service.sheet is not None,
         "sheet_id": sheets_service.sheet_id if sheets_service else None
     }
@@ -293,16 +295,41 @@ app.include_router(users_router)
 app.include_router(roles_router)
 
 # ── Seed default data on startup ─────────────────────────────
-def _run_db_migrations():
-    """Apply pending Alembic migrations (local dev + Render via start.sh)."""
+def _get_alembic_revision() -> dict:
     try:
         from alembic.config import Config
-        from alembic import command
+        from alembic.script import ScriptDirectory
+        from alembic.runtime.migration import MigrationContext
+        from database.database import engine
+
         alembic_ini = os.path.join(BASE_DIR, "alembic.ini")
-        command.upgrade(Config(alembic_ini), "head")
-        print("✅ Database migrations applied")
+        script = ScriptDirectory.from_config(Config(alembic_ini))
+        with engine.connect() as conn:
+            current = MigrationContext.configure(conn).get_current_revision()
+        return {"current": current, "head": script.get_current_head()}
     except Exception as e:
-        print(f"⚠️ Database migration failed: {e}")
+        return {"error": str(e)}
+
+
+def _get_schema_status() -> dict:
+    try:
+        from database.database import engine
+        from services.schema_checks import debt_record_schema_status, credit_card_purchase_schema_status
+        return {
+            "debt_records": debt_record_schema_status(engine),
+            "credit_card_purchases": credit_card_purchase_schema_status(engine),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _run_db_migrations():
+    """Apply pending Alembic migrations (local dev + Render via start.sh)."""
+    from alembic.config import Config
+    from alembic import command
+    alembic_ini = os.path.join(BASE_DIR, "alembic.ini")
+    command.upgrade(Config(alembic_ini), "head")
+    print("✅ Database migrations applied")
 
 
 @app.on_event("startup")
@@ -1369,6 +1396,8 @@ async def get_monthly_purchases_total(
     try:
         result = credit_card_service.get_monthly_purchases_total(year, month, user_id=current_user.id)
         return result
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         print(f"❌ Error fetching monthly purchases total: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2108,10 +2137,16 @@ async def get_debt_records_projected(
     normalized_status = status.upper() if isinstance(status, str) else None
     if normalized_status not in {"ACTIVA", "CANCELADA", "VENCIDA"}:
         normalized_status = None
-    return debt_record_service.get_debt_records_with_projection(
-        user_id=current_user.id,
-        status=normalized_status
-    )
+    try:
+        return debt_record_service.get_debt_records_with_projection(
+            user_id=current_user.id,
+            status=normalized_status
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        print(f"❌ Error listing projected debt records: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/debt-records/{record_id}")
@@ -2140,7 +2175,10 @@ async def create_debt_record(
         return debt_record_service.create_debt_record(data=data.dict(exclude_none=True), user_id=current_user.id)
     except (KeyError, ValueError) as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
+        print(f"❌ Error creating debt record: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
