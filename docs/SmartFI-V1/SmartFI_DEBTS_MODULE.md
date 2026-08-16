@@ -70,7 +70,10 @@ Estado sincronizado con Gitea (2026-06-01):
 | DBT-FEAT-012 | FEAT | media | DBT-FEAT-006 | TDB | ⏳ Todo | Dashboard unificado de deuda (CC + no CC) por origen, fuente, vencimiento y estado, sin mezclar fuentes canonicas. |
 | DBT-FEAT-013 | FEAT | media | | TDB | ✅ Done | Junto al resumen del periodo TC muestra comisiones acumuladas de extracciones en efectivo (`cash_advance_commission_total` en API + UI en CreditCardManager). |
 | DBT-FEAT-014 | FEAT | baja | | TDB | ✅ Done | Spinner de carga en tabla de deudas (`DebtManager` modo debts) |
-| DBT-FEAT-015 | FEAT | Alta | | TDB | ⏳ In Testing | IVA sobre intereses configurable en alta/edición de deuda (default 21%); impacta monto de cuota proyectada en Presupuesto. |
+| DBT-FEAT-015 | FEAT | Alta | | TDB | ✅ Done | IVA sobre intereses configurable en alta/edición de deuda (default 21%); impacta monto de cuota proyectada en Presupuesto. |
+| DBT-BUG-016 | BUG | Alta | | TDB | ✅ Done | Al registrar pago, el modal prellenaba el saldo total del préstamo en lugar de la cuota actual; fix en `DebtManager` + listado de pagos con opción eliminar para revertir pagos erróneos. |
+| DBT-BUG-017 | BUG | Alta | DBT-BUG-016 | TDB | ✅ Done | Formato decimal AR unificado en UI + parseo correcto; fix backend: proyecciones mantienen cuota fija por mes (marzo=cuota 1) y marcan PAGADA al registrar pago completo. |
+| DBT-FEAT-18 | FEAT | Alta || Dashboard en pagina de deudas, con gráficos de torta con montos totales separados por prestamista, otro por tipo (deuda tarjeta, préstamos personal, privados no bancarios etc) y un tercero de barras apiladas (total y pago realizados) de cada deuda. |
 
 ### Analisis de coherencia (DBT-FEAT-004 a DBT-FEAT-008)
 

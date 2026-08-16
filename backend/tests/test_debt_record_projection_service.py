@@ -108,7 +108,7 @@ def test_create_without_due_date_defaults_next_month_and_generates_12(service, s
     assert months[-1] == "2027-06"
 
 
-def test_projection_count_matches_remaining_installments(service, seeded_user_id):
+def test_projection_count_matches_total_installments_when_mid_loan(service, seeded_user_id):
     rec = service.create_debt_record(
         {
             "debt_name": f"{TEST_DELETE_PREFIX}TEST_REMAINING",
@@ -123,8 +123,14 @@ def test_projection_count_matches_remaining_installments(service, seeded_user_id
     )
 
     months = _count_projection_months(rec["id"])
-    # total - current + 1 = 4
-    assert len(months) == 4
+    assert len(months) == 6
+
+    records = service.get_debt_records_with_projection(user_id=seeded_user_id)
+    target = next(r for r in records if r["id"] == rec["id"])
+    cuota1 = next(p for p in target["projections"] if p["debt_quota_number"] == 1)
+    cuota3 = next(p for p in target["projections"] if p["debt_quota_number"] == 3)
+    assert cuota1["status"] in ("PAGADA", "Pagada")
+    assert cuota3["status"] in ("PENDIENTE", "Pendiente")
 
 
 def test_reconcile_restores_missing_projection_rows(service, seeded_user_id):
@@ -402,3 +408,47 @@ def test_projection_ejecutado_is_per_installment_not_loan_total(service, seeded_
     assert cuota1["monto_ejecutado"] == pytest.approx(installment / 2, rel=1e-4)
     assert cuota1["status"] in ("PAGO_PARCIAL", "Pago parcial")
     assert cuota1["monto_ejecutado"] < rec["principal_amount"]
+
+
+def test_full_installment_payment_marks_quota_paid_and_keeps_schedule(service, seeded_user_id):
+    rec = service.create_debt_record(
+        {
+            "debt_name": f"{TEST_DELETE_PREFIX}TEST_PROJ_FULL_PAY",
+            "debt_type": "PERSONAL",
+            "principal_amount": 5000000,
+            "outstanding_amount": 5000000,
+            "annual_interest_rate": 88,
+            "interest_vat_rate": 21,
+            "total_installments": 12,
+            "current_installment": 1,
+            "pending_installments": 12,
+            "start_date": "2026-03-01",
+            "due_date": "2026-03-01",
+        },
+        user_id=seeded_user_id,
+    )
+
+    records = service.get_debt_records_with_projection(user_id=seeded_user_id)
+    target = next(r for r in records if r["id"] == rec["id"])
+    cuota1_before = target["projections"][0]
+    installment = cuota1_before["monto_total"]
+
+    service.add_payment(
+        debt_record_id=rec["id"],
+        data={"amount": installment, "payment_date": "2026-03-16"},
+        user_id=seeded_user_id,
+    )
+
+    records = service.get_debt_records_with_projection(user_id=seeded_user_id)
+    target = next(r for r in records if r["id"] == rec["id"])
+    assert target["current_installment"] == pytest.approx(2.0, rel=1e-9)
+
+    cuota1 = next(p for p in target["projections"] if p["debt_quota_number"] == 1)
+    cuota2 = next(p for p in target["projections"] if p["debt_quota_number"] == 2)
+
+    assert cuota1["monto_ejecutado"] == pytest.approx(installment, rel=1e-4)
+    assert cuota1["status"] in ("PAGADA", "Pagada")
+    assert cuota2["monto_ejecutado"] == pytest.approx(0, abs=0.01)
+    assert cuota2["status"] in ("PENDIENTE", "Pendiente")
+    assert cuota1["monto_total"] == pytest.approx(installment, rel=1e-4)
+    assert cuota2["monto_total"] != cuota1["monto_total"]

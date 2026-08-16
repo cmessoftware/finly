@@ -5,6 +5,7 @@ import { debtsAPI, debtRecordsAPI, transactionsAPI } from '../services/api';
 import { useToast } from './ToastContainer';
 import ConfirmDialog from './ConfirmDialog';
 import { formatDate, toISODate } from '../utils/dateUtils';
+import { formatArCurrency, formatArNumber, parseArNumber, formatAmountInputOnBlur } from '../utils/currencyUtils';
 import { exportToCsv } from '../utils/csvExport';
 import BudgetCSVImport from './BudgetCSVImport';
 import EditDebtModal from './EditDebtModal';
@@ -32,6 +33,23 @@ const MONTH_NAMES = [
   'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
 ];
+
+/** Cuota del mes vs saldo total del préstamo (DBT-BUG-016). */
+const getDebtPaymentContext = (debt) => {
+  const installmentDue = Number(debt.estimated_payment ?? debt.monto_total ?? 0);
+  const installmentPaid = Number(debt.monto_ejecutado ?? debt.monto_pagado ?? 0);
+  const installmentRemaining = Math.max(0, installmentDue - installmentPaid);
+  const totalOutstanding = Number(debt.outstanding_amount ?? 0);
+  const defaultAmount = installmentRemaining > 0
+    ? installmentRemaining
+    : Math.min(installmentDue, totalOutstanding);
+  return {
+    installmentDue,
+    installmentRemaining,
+    totalOutstanding,
+    defaultAmount: defaultAmount > 0 ? defaultAmount : 0,
+  };
+};
 
 const getYearMonthKey = (value) => {
   if (!value) return '';
@@ -103,7 +121,12 @@ export default function DebtManager({ canEdit, isAdmin = false, mode = 'debts' }
   const [isCloning, setIsCloning] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [debtToEdit, setDebtToEdit] = useState(null);
-  const [paymentModal, setPaymentModal] = useState({ open: false, debt: null });
+  const [paymentModal, setPaymentModal] = useState({
+    open: false,
+    debt: null,
+    payments: [],
+    paymentsLoading: false,
+  });
   const [paymentForm, setPaymentForm] = useState({ payment_date: '', amount: '', notes: '' });
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState({ isOpen: false, debtId: null, debtName: '' });
@@ -254,37 +277,85 @@ export default function DebtManager({ canEdit, isAdmin = false, mode = 'debts' }
     setDebtToEdit(null);
   };
 
+  const refreshPaymentModalDebt = async (debtId) => {
+    const response = await debtRecordsAPI.getProjectedDebts();
+    const updated = (response.data || []).find((item) => item.id === debtId);
+    if (!updated) return null;
+    const ctx = getDebtPaymentContext(updated);
+    setPaymentModal((prev) => ({ ...prev, debt: updated }));
+    setPaymentForm((prev) => ({
+      ...prev,
+      amount: ctx.defaultAmount > 0 ? formatArNumber(ctx.defaultAmount) : '',
+    }));
+    return updated;
+  };
+
+  const loadPaymentHistory = async (debtId) => {
+    setPaymentModal((prev) => ({ ...prev, paymentsLoading: true }));
+    try {
+      const response = await debtRecordsAPI.getPayments(debtId);
+      setPaymentModal((prev) => ({
+        ...prev,
+        paymentsLoading: false,
+        payments: response.data || [],
+      }));
+    } catch (error) {
+      setPaymentModal((prev) => ({ ...prev, paymentsLoading: false, payments: [] }));
+      console.error('Error loading debt payments:', error);
+    }
+  };
+
   const openPaymentModal = (debt) => {
     const today = new Date().toISOString().slice(0, 10);
-    const outstanding = Number(debt.outstanding_amount ?? Math.max(0, Number(debt.monto_total || 0) - Number(debt.monto_ejecutado ?? debt.monto_pagado ?? 0)));
-    setPaymentModal({ open: true, debt });
+    const ctx = getDebtPaymentContext(debt);
+    setPaymentModal({ open: true, debt, payments: [], paymentsLoading: true });
     setPaymentForm({
       payment_date: today,
-      amount: outstanding > 0 ? outstanding.toFixed(2) : '',
+      amount: ctx.defaultAmount > 0 ? formatArNumber(ctx.defaultAmount) : '',
       notes: '',
     });
+    loadPaymentHistory(debt.id);
   };
 
   const closePaymentModal = () => {
     if (paymentSubmitting) return;
-    setPaymentModal({ open: false, debt: null });
+    setPaymentModal({ open: false, debt: null, payments: [], paymentsLoading: false });
     setPaymentForm({ payment_date: '', amount: '', notes: '' });
+  };
+
+  const handleDeleteDebtPayment = async (paymentId) => {
+    if (!paymentModal.debt || paymentSubmitting) return;
+    if (!window.confirm('¿Eliminar este pago y restaurar saldo/cuotas?')) return;
+
+    setPaymentSubmitting(true);
+    try {
+      await debtRecordsAPI.deletePayment(paymentId);
+      toast.success('Pago eliminado; deuda recalculada');
+      await loadDebts();
+      await loadPaymentHistory(paymentModal.debt.id);
+      await refreshPaymentModalDebt(paymentModal.debt.id);
+    } catch (error) {
+      const detail = error?.response?.data?.detail || 'Error al eliminar pago';
+      toast.error(detail);
+    } finally {
+      setPaymentSubmitting(false);
+    }
   };
 
   const submitDebtPayment = async (e) => {
     e.preventDefault();
     if (!paymentModal.debt) return;
 
-    const amount = Number(paymentForm.amount);
+    const amount = parseArNumber(paymentForm.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
       toast.warning('Ingrese un monto de pago válido');
       return;
     }
 
     const debt = paymentModal.debt;
-    const outstanding = Number(debt.outstanding_amount ?? Math.max(0, Number(debt.monto_total || 0) - Number(debt.monto_ejecutado ?? debt.monto_pagado ?? 0)));
-    if (amount - outstanding > 0.000001) {
-      toast.warning('El pago no puede superar el saldo pendiente');
+    const { totalOutstanding } = getDebtPaymentContext(debt);
+    if (totalOutstanding > 0 && amount - totalOutstanding > 0.000001) {
+      toast.warning('El pago no puede superar el saldo total de la deuda');
       return;
     }
 
@@ -296,15 +367,15 @@ export default function DebtManager({ canEdit, isAdmin = false, mode = 'debts' }
         notes: paymentForm.notes?.trim() || undefined,
       });
       toast.success('Pago registrado correctamente');
-      setPaymentSubmitting(false);
-      setPaymentModal({ open: false, debt: null });
-      setPaymentForm({ payment_date: '', amount: '', notes: '' });
       await loadDebts();
+      await loadPaymentHistory(debt.id);
+      await refreshPaymentModalDebt(debt.id);
     } catch (error) {
       const detail = error?.response?.data?.detail || 'Error al registrar pago';
       toast.error(detail);
+    } finally {
+      setPaymentSubmitting(false);
     }
-    setPaymentSubmitting(false);
   };
 
   const handleDeleteClick = (debt) => {
@@ -433,14 +504,7 @@ export default function DebtManager({ canEdit, isAdmin = false, mode = 'debts' }
     return 'bg-yellow-500';
   };
 
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('es-AR', {
-      style: 'currency',
-      currency: 'ARS',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount);
-  };
+  const formatCurrency = (amount) => formatArCurrency(amount);
 
   const handleExportDebtsCsv = () => {
     const rows = displayedDebts.map((debt) => {
@@ -1624,9 +1688,48 @@ export default function DebtManager({ canEdit, isAdmin = false, mode = 'debts' }
                       <p className="text-sm text-gray-600 mb-4">
                         {paymentModal.debt.detalle || paymentModal.debt.debt_name}
                       </p>
-                      <p className="text-sm text-gray-700 mb-4">
-                        Saldo pendiente: <strong>{formatCurrency(paymentModal.debt.outstanding_amount ?? Math.max(0, Number(paymentModal.debt.monto_total || 0) - Number(paymentModal.debt.monto_ejecutado ?? paymentModal.debt.monto_pagado ?? 0)))}</strong>
-                      </p>
+                      {(() => {
+                        const ctx = getDebtPaymentContext(paymentModal.debt);
+                        return (
+                          <div className="text-sm text-gray-700 mb-4 space-y-1">
+                            <p>
+                              Cuota actual: <strong>{formatCurrency(ctx.installmentDue)}</strong>
+                              {ctx.installmentRemaining < ctx.installmentDue && (
+                                <span className="text-gray-500"> — resta {formatCurrency(ctx.installmentRemaining)}</span>
+                              )}
+                            </p>
+                            <p>
+                              Saldo total deuda: <strong>{formatCurrency(ctx.totalOutstanding)}</strong>
+                            </p>
+                          </div>
+                        );
+                      })()}
+
+                      {paymentModal.payments.length > 0 && (
+                        <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <p className="text-xs font-semibold text-gray-600 mb-2">Pagos registrados</p>
+                          <ul className="space-y-2 max-h-32 overflow-y-auto">
+                            {paymentModal.payments.map((payment) => (
+                              <li key={payment.id} className="flex items-center justify-between text-sm gap-2">
+                                <span className="text-gray-700">
+                                  {formatDate(payment.payment_date)} — {formatCurrency(payment.amount)}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteDebtPayment(payment.id)}
+                                  disabled={paymentSubmitting}
+                                  className="text-red-600 hover:text-red-800 text-xs font-medium shrink-0"
+                                >
+                                  Eliminar
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {paymentModal.paymentsLoading && (
+                        <p className="text-xs text-gray-500 mb-4">Cargando pagos...</p>
+                      )}
 
                       <form onSubmit={submitDebtPayment} className="space-y-4">
                         <div>
@@ -1641,11 +1744,15 @@ export default function DebtManager({ canEdit, isAdmin = false, mode = 'debts' }
                         <div>
                           <label className="block text-sm font-medium text-gray-700 mb-1">Monto *</label>
                           <input
-                            type="number"
-                            min="0"
-                            step="0.01"
+                            type="text"
+                            inputMode="decimal"
                             value={paymentForm.amount}
                             onChange={(e) => setPaymentForm((prev) => ({ ...prev, amount: e.target.value }))}
+                            onBlur={(e) => setPaymentForm((prev) => ({
+                              ...prev,
+                              amount: formatAmountInputOnBlur(e.target.value),
+                            }))}
+                            placeholder="0,00"
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
                             required
                           />

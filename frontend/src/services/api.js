@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { parseArNumber } from '../utils/currencyUtils';
 
 // Runtime (Docker/nginx) > build-time env > dev proxy (same origin) > IPv4 fallback.
 // Use 127.0.0.1 instead of localhost: on Windows, localhost:8000 can hit WSL/Docker via IPv6 and hang.
@@ -166,7 +167,10 @@ export const monthsAPI = {
 };
 
 const toNumber = (value, fallback = 0) => {
-  const n = Number(value);
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : fallback;
+  }
+  const n = parseArNumber(value);
   return Number.isFinite(n) ? n : fallback;
 };
 
@@ -209,7 +213,7 @@ const toDebtRecordPayloadFromBudgetForm = (debt) => {
 
   const parseNullableNumber = (value) => {
     if (value === null || value === undefined || value === '') return null;
-    const n = Number(value);
+    const n = parseArNumber(value);
     return Number.isFinite(n) ? n : null;
   };
 

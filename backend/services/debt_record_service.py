@@ -39,17 +39,8 @@ class DebtRecordService:
         return date.today()
 
     def _projection_installment_count(self, record: DebtRecord) -> int:
+        """Number of monthly projection rows — always the full loan term."""
         total = float(record.total_installments) if record.total_installments is not None else None
-        current = float(record.current_installment) if record.current_installment is not None else None
-        pending = float(record.pending_installments) if record.pending_installments is not None else None
-
-        if pending is not None and pending > 0:
-            # Keep one row for any remaining fractional installment.
-            return max(1, int(math.ceil(pending)))
-
-        if total is not None and current is not None:
-            remaining = int(round(total - current + 1.0))
-            return max(1, remaining)
         if total is not None:
             return max(1, int(round(total)))
         return 1
@@ -111,32 +102,27 @@ class DebtRecordService:
         return balance
 
     def _fixed_installment_amount_at_index(self, record: DebtRecord, installment_index: int) -> float:
-        outstanding = float(record.outstanding_amount or 0)
-        if outstanding <= 0:
+        """Scheduled installment amount from original principal/amortization (stable across payments)."""
+        principal = float(record.principal_amount or 0)
+        if principal <= 0:
+            principal = float(record.outstanding_amount or 0)
+        if principal <= 0:
             return 0.0
 
-        pending = self._pending_installments_for_calc(record)
+        total = float(record.total_installments) if record.total_installments is not None else None
+        n_installments = max(1, int(round(total))) if total is not None else 1
         annual_rate = float(record.annual_interest_rate or 0)
         vat_rate = self._interest_vat_rate(record)
 
         if annual_rate <= 0:
-            return round(outstanding / pending, 2)
+            return round(principal / n_installments, 2)
 
         monthly_rate = annual_rate / 100.0 / 12.0
-        use_annuity = abs(pending - round(pending)) < 1e-9
-
-        if use_annuity:
-            n = int(round(pending))
-            pmt = self._annuity_payment(outstanding, monthly_rate, n)
-            balance = self._balance_after_payments(outstanding, monthly_rate, pmt, installment_index)
-            interest = balance * monthly_rate
-            vat = interest * vat_rate / 100.0 if vat_rate > 0 else 0.0
-            return round(pmt + vat, 2)
-
-        base = outstanding / pending
-        interest_estimate = outstanding * monthly_rate
-        vat = interest_estimate * vat_rate / 100.0 if vat_rate > 0 else 0.0
-        return round(base + vat, 2)
+        pmt = self._annuity_payment(principal, monthly_rate, n_installments)
+        balance = self._balance_after_payments(principal, monthly_rate, pmt, installment_index)
+        interest = balance * monthly_rate
+        vat = interest * vat_rate / 100.0 if vat_rate > 0 else 0.0
+        return round(pmt + vat, 2)
 
     def _sync_projection_ejecutado(self, record: DebtRecord, quota, per_installment_amount: float):
         """Derive monto_ejecutado and status for one scheduled quota from payment progress."""
@@ -260,18 +246,12 @@ class DebtRecordService:
     def _projection_schedule(self, record: DebtRecord) -> list:
         base = self._projection_base_date(record)
         count = self._projection_installment_count(record)
-        total = float(record.total_installments) if record.total_installments is not None else None
-
-        if total is not None:
-            first_quota = int(total - count + 1)
-        else:
-            first_quota = int(float(record.current_installment or 1))
 
         schedule = []
         for idx in range(count):
             projection_date = self._add_months(base, idx)
             month_key = projection_date.strftime("%Y-%m")
-            quota = first_quota + idx
+            quota = idx + 1
             schedule.append((month_key, projection_date, quota))
         return schedule
 
@@ -372,7 +352,7 @@ class DebtRecordService:
             if not existing:
                 self._upsert_budget_projection(record)
                 return True
-            expected_amount = self._installment_amount_at_index(record, idx)
+            expected_amount = self._installment_amount_at_index(record, max(0, int(quota) - 1))
             if abs(float(existing.monto_total or 0) - expected_amount) > 0.01:
                 self._upsert_budget_projection(record)
                 return True
@@ -400,7 +380,8 @@ class DebtRecordService:
         valid_months = {month_key for month_key, _, _ in schedule}
 
         for idx, (month_key, projection_date, quota) in enumerate(schedule):
-            per_installment_amount = self._installment_amount_at_index(record, idx)
+            installment_index = max(0, int(quota) - 1)
+            per_installment_amount = self._installment_amount_at_index(record, installment_index)
             projection_date_iso = projection_date.isoformat()
             budget_item = existing_by_month.get(month_key)
             detail = self._build_projection_detail(record, quota, per_installment_amount)
