@@ -21,6 +21,24 @@ class DebtRecordService:
         if self.db:
             self.db.close()
 
+    def _reset_session(self):
+        """Clear stale failed transactions on the process-wide singleton session."""
+        try:
+            self.db.rollback()
+        except Exception:
+            try:
+                self.db.close()
+            except Exception:
+                pass
+            self.db = SessionLocal()
+
+    def _commit_or_rollback(self):
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+
     def _ensure_schema(self):
         assert_debt_record_schema(self.db.bind)
 
@@ -453,6 +471,7 @@ class DebtRecordService:
 
     def get_debt_records(self, user_id: int, status: str = None) -> list:
         """Return all debt records for a user, optionally filtered by status."""
+        self._reset_session()
         self._ensure_schema()
         q = self.db.query(DebtRecord).filter(DebtRecord.user_id == user_id)
         if status:
@@ -466,72 +485,78 @@ class DebtRecordService:
 
     def get_debt_records_with_projection(self, user_id: int, status: str = None) -> list:
         """Return debt records enriched with linked budget projection summary."""
-        self._ensure_schema()
-        q = self.db.query(DebtRecord).filter(DebtRecord.user_id == user_id)
-        if status:
-            try:
-                q = q.filter(DebtRecord.status == DebtRecordStatus(status))
-            except ValueError:
-                pass
+        self._reset_session()
+        try:
+            self._ensure_schema()
+            q = self.db.query(DebtRecord).filter(DebtRecord.user_id == user_id)
+            if status:
+                try:
+                    q = q.filter(DebtRecord.status == DebtRecordStatus(status))
+                except ValueError:
+                    pass
 
-        records = q.order_by(DebtRecord.created_at.desc()).all()
-        record_ids = [r.id for r in records]
-        projections = []
-        if record_ids:
-            projections = self.db.query(BudgetItem).filter(
-                BudgetItem.user_id == user_id,
-                BudgetItem.debt_record_id.in_(record_ids)
-            ).all()
+            records = q.order_by(DebtRecord.created_at.desc()).all()
+            record_ids = [r.id for r in records]
+            projections = []
+            if record_ids:
+                projections = self.db.query(BudgetItem).filter(
+                    BudgetItem.user_id == user_id,
+                    BudgetItem.debt_record_id.in_(record_ids)
+                ).all()
 
-        by_record = {}
-        for p in projections:
-            by_record.setdefault(p.debt_record_id, []).append(p)
-
-        reconciled_any = False
-        for record in records:
-            projections_for_record = by_record.get(record.id, [])
-            if self._reconcile_projection_if_needed(record, projections_for_record):
-                reconciled_any = True
-
-        if reconciled_any:
-            self.db.commit()
-            projections = self.db.query(BudgetItem).filter(
-                BudgetItem.user_id == user_id,
-                BudgetItem.debt_record_id.in_(record_ids)
-            ).all() if record_ids else []
             by_record = {}
             for p in projections:
                 by_record.setdefault(p.debt_record_id, []).append(p)
 
-        result = []
-        for record in records:
-            projections_for_record = by_record.get(record.id, [])
-            projections_sorted = sorted(projections_for_record, key=self._projection_sort_key)
-            projection_current = None
-            if projections_sorted and record.current_installment is not None:
-                current = float(record.current_installment)
-                projection_current = next(
-                    (
-                        p for p in projections_sorted
-                        if p.debt_quota_number is not None and abs(float(p.debt_quota_number) - current) < 0.0001
-                    ),
-                    None,
-                )
+            reconciled_any = False
+            for record in records:
+                projections_for_record = by_record.get(record.id, [])
+                if self._reconcile_projection_if_needed(record, projections_for_record):
+                    reconciled_any = True
 
-            if projection_current is None and projections_sorted:
-                projection_current = projections_sorted[0]
+            if reconciled_any:
+                self._commit_or_rollback()
+                projections = self.db.query(BudgetItem).filter(
+                    BudgetItem.user_id == user_id,
+                    BudgetItem.debt_record_id.in_(record_ids)
+                ).all() if record_ids else []
+                by_record = {}
+                for p in projections:
+                    by_record.setdefault(p.debt_record_id, []).append(p)
 
-            item = self._record_to_dict(record)
-            item["projection_count"] = len(projections_sorted)
-            item["projection_current"] = self._projection_to_dict(projection_current)
-            item["projections"] = [self._projection_to_dict(p) for p in projections_sorted]
-            item["projection_months"] = [p.version_source_month for p in projections_sorted if p.version_source_month]
-            result.append(item)
+            result = []
+            for record in records:
+                projections_for_record = by_record.get(record.id, [])
+                projections_sorted = sorted(projections_for_record, key=self._projection_sort_key)
+                projection_current = None
+                if projections_sorted and record.current_installment is not None:
+                    current = float(record.current_installment)
+                    projection_current = next(
+                        (
+                            p for p in projections_sorted
+                            if p.debt_quota_number is not None and abs(float(p.debt_quota_number) - current) < 0.0001
+                        ),
+                        None,
+                    )
 
-        return result
+                if projection_current is None and projections_sorted:
+                    projection_current = projections_sorted[0]
+
+                item = self._record_to_dict(record)
+                item["projection_count"] = len(projections_sorted)
+                item["projection_current"] = self._projection_to_dict(projection_current)
+                item["projections"] = [self._projection_to_dict(p) for p in projections_sorted]
+                item["projection_months"] = [p.version_source_month for p in projections_sorted if p.version_source_month]
+                result.append(item)
+
+            return result
+        except Exception:
+            self.db.rollback()
+            raise
 
     def get_debt_record(self, record_id: int, user_id: int) -> dict:
         """Return a single debt record (must belong to user)."""
+        self._reset_session()
         record = self.db.query(DebtRecord).filter(
             DebtRecord.id == record_id,
             DebtRecord.user_id == user_id
@@ -542,6 +567,7 @@ class DebtRecordService:
 
     def create_debt_record(self, data: dict, user_id: int) -> dict:
         """Create a new debt record."""
+        self._reset_session()
         self._ensure_schema()
         payload = self._normalize_installments(data)
         start_date = _parse_date(payload.get("start_date"))
@@ -586,6 +612,7 @@ class DebtRecordService:
 
     def update_debt_record(self, record_id: int, data: dict, user_id: int) -> dict:
         """Update fields of an existing debt record."""
+        self._reset_session()
         record = self.db.query(DebtRecord).filter(
             DebtRecord.id == record_id,
             DebtRecord.user_id == user_id
@@ -630,6 +657,7 @@ class DebtRecordService:
 
     def delete_debt_record(self, record_id: int, user_id: int) -> bool:
         """Delete a debt record and its payments (cascade)."""
+        self._reset_session()
         record = self.db.query(DebtRecord).filter(
             DebtRecord.id == record_id,
             DebtRecord.user_id == user_id
@@ -659,6 +687,7 @@ class DebtRecordService:
 
     def get_payments(self, debt_record_id: int, user_id: int) -> list:
         """Return all payments for a debt record (verifying ownership)."""
+        self._reset_session()
         record = self.db.query(DebtRecord).filter(
             DebtRecord.id == debt_record_id,
             DebtRecord.user_id == user_id
@@ -672,6 +701,7 @@ class DebtRecordService:
 
     def add_payment(self, debt_record_id: int, data: dict, user_id: int) -> dict:
         """Register a payment against a debt record, reducing outstanding_amount."""
+        self._reset_session()
         record = self.db.query(DebtRecord).filter(
             DebtRecord.id == debt_record_id,
             DebtRecord.user_id == user_id
@@ -699,14 +729,19 @@ class DebtRecordService:
         record.updated_at = datetime.utcnow()
         self._upsert_budget_projection(record)
 
-        self.db.commit()
-        self.db.refresh(payment)
-        self.db.refresh(record)
+        try:
+            self.db.commit()
+            self.db.refresh(payment)
+            self.db.refresh(record)
+        except Exception:
+            self.db.rollback()
+            raise
         logger.info(f"✅ Payment {payment.id} registered for DebtRecord {debt_record_id}")
         return self._payment_to_dict(payment)
 
     def delete_payment(self, payment_id: int, user_id: int) -> bool:
         """Delete a payment and restore outstanding_amount on the parent record."""
+        self._reset_session()
         payment = self.db.query(DebtPayment).filter(
             DebtPayment.id == payment_id
         ).first()
@@ -726,7 +761,11 @@ class DebtRecordService:
         self._upsert_budget_projection(record)
 
         self.db.delete(payment)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         logger.info(f"🗑️ Payment {payment_id} deleted, outstanding restored for DebtRecord {payment.debt_record_id}")
         return True
 
