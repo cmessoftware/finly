@@ -59,6 +59,20 @@ function Test-BackendHealth {
     }
 }
 
+function Wait-BackendHealth {
+    param(
+        [int]$TimeoutSeconds = 90,
+        [int]$IntervalSeconds = 2
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-BackendHealth) { return $true }
+        Start-Sleep -Seconds $IntervalSeconds
+    }
+    return $false
+}
+
 $backendPort = 8000
 $frontendPort = 5173
 $backendPid = Get-PortOwnerPid $backendPort
@@ -97,16 +111,15 @@ if (!$skipBackend) {
 
     if ($useCondaEnv) {
         $condaEnvPython = "C:\Users\sergiosal\miniforge3\envs\finly\python.exe"
-        Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; Write-Host '🔧 Backend Server Starting (conda: finly)...' -ForegroundColor Yellow; & '$condaEnvPython' -m alembic upgrade head; & '$condaEnvPython' main.py"
+        Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; Write-Host '🔧 Backend Server Starting (conda: finly)...' -ForegroundColor Yellow; & '$condaEnvPython' main.py"
     } elseif ($useVenv) {
-        Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; Write-Host '🔧 Backend Server Starting (venv)...' -ForegroundColor Yellow; .\venv\Scripts\Activate.ps1; alembic upgrade head; python main.py"
+        Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; Write-Host '🔧 Backend Server Starting (venv)...' -ForegroundColor Yellow; .\venv\Scripts\Activate.ps1; python main.py"
     } else {
-        Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; Write-Host '🔧 Backend Server Starting...' -ForegroundColor Yellow; alembic upgrade head; python main.py"
+        Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd backend; Write-Host '🔧 Backend Server Starting...' -ForegroundColor Yellow; python main.py"
     }
 
-    Start-Sleep -Seconds 4
-
-    if (-not (Test-BackendHealth)) {
+    Write-Host "   Esperando backend (migraciones + arranque, hasta 90s)..." -ForegroundColor Gray
+    if (-not (Wait-BackendHealth -TimeoutSeconds 90)) {
         Write-Host "❌ El backend no respondió en http://127.0.0.1:8000/api/health" -ForegroundColor Red
         Write-Host "   Revisa la ventana del backend por errores." -ForegroundColor Yellow
     } else {

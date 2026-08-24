@@ -58,18 +58,28 @@ except Exception as e:
     print(f"⚠️ Credit Card service not available: {e}")
     credit_card_service = None
 
-# Initialize Google Sheets (optional backup)
+# Initialize Google Sheets (optional backup) — do not block API startup on slow network
+sheets_service = None
 try:
-    from services.google_sheets import sheets_service
-    if sheets_service.sheet_id:
-        if sheets_service.connect():
-            sheets_service.initialize_sheet()
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+    from services.google_sheets import sheets_service as _sheets_service
+
+    if _sheets_service.sheet_id:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_sheets_service.connect)
+            try:
+                connected = future.result(timeout=8)
+            except FuturesTimeoutError:
+                connected = False
+                print("⚠️ Google Sheets connect timed out (API will start without Sheets)")
+        if connected:
+            _sheets_service.initialize_sheet()
+            sheets_service = _sheets_service
             print("✅ Google Sheets connected successfully (backup)")
         else:
             print("⚠️ Google Sheets not connected")
     else:
         print("⚠️ GOOGLE_SHEET_ID not configured")
-        sheets_service = None
 except Exception as e:
     print(f"⚠️ Google Sheets not available: {e}")
     sheets_service = None
@@ -325,11 +335,17 @@ def _get_schema_status() -> dict:
 
 def _run_db_migrations():
     """Apply pending Alembic migrations (local dev + Render via start.sh)."""
-    from alembic.config import Config
-    from alembic import command
-    alembic_ini = os.path.join(BASE_DIR, "alembic.ini")
-    command.upgrade(Config(alembic_ini), "head")
-    print("✅ Database migrations applied")
+    try:
+        from alembic.config import Config
+        from alembic import command
+        alembic_ini = os.path.join(BASE_DIR, "alembic.ini")
+        command.upgrade(Config(alembic_ini), "head")
+        print("✅ Database migrations applied")
+    except Exception as e:
+        print(f"❌ Database migration failed: {e}")
+        if os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
+            raise
+        print("⚠️ Continuing startup without blocking local dev (fix migrations and restart)")
 
 
 @app.on_event("startup")

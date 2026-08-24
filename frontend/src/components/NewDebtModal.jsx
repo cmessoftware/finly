@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { debtsAPI } from '../services/api';
 import { useToast } from './ToastContainer';
+import { parseArNumber, formatAmountInputOnBlur, AMOUNT_FIELD_NAMES } from '../utils/currencyUtils';
 
 const getInitialDate = (yearMonth) => {
   if (typeof yearMonth === 'string' && /^\d{4}-\d{2}$/.test(yearMonth)) {
@@ -41,7 +42,7 @@ const buildInitialFormData = (yearMonth) => {
 };
 
 const computeSalaryInstallment = (baseSalary, percent, increasePercent, intervalMonths, installmentIndex) => {
-  const base = Number(baseSalary);
+  const base = parseArNumber(baseSalary);
   const z = Number(percent);
   const x = Number(increasePercent);
   const n = Number(intervalMonths);
@@ -106,9 +107,24 @@ export default function NewDebtModal({ isOpen, onClose, onSuccess, yearMonth, on
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
+  const handleBlur = (e) => {
+    const { name, value } = e.target;
+    if (!AMOUNT_FIELD_NAMES.has(name)) return;
+    setFormData((prev) => ({
+      ...prev,
+      [name]: formatAmountInputOnBlur(value),
+    }));
+  };
+
   const toNullableNumber = (value) => {
     if (value === '' || value === null || value === undefined) return null;
     const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const toNullableAmount = (value) => {
+    if (value === '' || value === null || value === undefined) return null;
+    const parsed = parseArNumber(value);
     return Number.isFinite(parsed) ? parsed : null;
   };
 
@@ -120,7 +136,8 @@ export default function NewDebtModal({ isOpen, onClose, onSuccess, yearMonth, on
       return;
     }
 
-    if (!formData.monto_total || parseFloat(formData.monto_total) <= 0) {
+    const montoTotal = parseArNumber(formData.monto_total);
+    if (!Number.isFinite(montoTotal) || montoTotal <= 0) {
       toast.warning('Ingrese un monto valido');
       return;
     }
@@ -134,7 +151,7 @@ export default function NewDebtModal({ isOpen, onClose, onSuccess, yearMonth, on
 
     const isSalaryPercent = formData.installment_mode === 'SALARY_PERCENT';
     if (isSalaryPercent) {
-      const baseSalary = toNullableNumber(formData.base_salary);
+      const baseSalary = toNullableAmount(formData.base_salary);
       const z = toNullableNumber(formData.installment_salary_percent);
       const x = toNullableNumber(formData.salary_increase_percent);
       const n = toNullableNumber(formData.salary_increase_interval_months);
@@ -165,13 +182,17 @@ export default function NewDebtModal({ isOpen, onClose, onSuccess, yearMonth, on
       const createDebt = onCreateDebt || debtsAPI.createDebt;
       const response = await createDebt({
         ...formData,
+        monto_total: montoTotal,
+        estimated_payment: formData.estimated_payment
+          ? parseArNumber(formData.estimated_payment)
+          : montoTotal,
         annual_interest_rate: toNullableNumber(formData.annual_interest_rate),
         interest_vat_rate: toNullableNumber(formData.interest_vat_rate) ?? 21,
         total_installments: totalInstallments,
         current_installment: currentInstallment,
         pending_installments: toNullableNumber(formData.pending_installments),
         installment_mode: formData.installment_mode || 'FIXED',
-        base_salary: toNullableNumber(formData.base_salary),
+        base_salary: toNullableAmount(formData.base_salary),
         installment_salary_percent: toNullableNumber(formData.installment_salary_percent),
         salary_increase_percent: toNullableNumber(formData.salary_increase_percent),
         salary_increase_interval_months: toNullableNumber(formData.salary_increase_interval_months),
@@ -327,13 +348,13 @@ export default function NewDebtModal({ isOpen, onClose, onSuccess, yearMonth, on
             <div>
               <label className="block text-sm font-medium text-finly-text mb-2">Monto total (ARS) *</label>
               <input
-                type="number"
+                type="text"
+                inputMode="decimal"
                 name="monto_total"
                 value={formData.monto_total}
                 onChange={handleChange}
-                step="0.01"
-                min="0"
-                placeholder="0.00"
+                onBlur={handleBlur}
+                placeholder="0,00"
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-finly-primary"
                 required
               />
@@ -435,13 +456,13 @@ export default function NewDebtModal({ isOpen, onClose, onSuccess, yearMonth, on
                 <div>
                   <label className="block text-sm font-medium text-finly-text mb-2">Sueldo base inicial (ARS) *</label>
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     name="base_salary"
                     value={formData.base_salary}
                     onChange={handleChange}
-                    step="0.01"
-                    min="0"
-                    placeholder="Ej: 1500000"
+                    onBlur={handleBlur}
+                    placeholder="Ej: 1.500.000,00"
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-finly-primary"
                   />
                 </div>

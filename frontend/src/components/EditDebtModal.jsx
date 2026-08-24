@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { toISODate } from '../utils/dateUtils';
+import { formatArNumber, parseArNumber, formatAmountInputOnBlur, AMOUNT_FIELD_NAMES } from '../utils/currencyUtils';
 
 const DEBT_TYPE_OPTIONS = [
   { value: 'PERSONAL', label: 'Personal' },
@@ -54,7 +55,7 @@ function EditDebtModal({ debt, onSave, onClose }) {
       creditor: debt.creditor || debt.categoria || '',
       fecha: toISODate(debt.fecha),
       fecha_vencimiento: toISODate(debt.fecha_vencimiento) || '',
-      monto_total: debt.monto_total != null ? String(debt.monto_total) : '',
+      monto_total: debt.monto_total != null ? formatArNumber(debt.monto_total) : '',
       annual_interest_rate: debt.annual_interest_rate != null ? String(debt.annual_interest_rate) : '',
       interest_vat_rate: debt.interest_vat_rate != null ? String(debt.interest_vat_rate) : '21',
       total_installments: debt.total_installments != null ? String(debt.total_installments) : '',
@@ -64,10 +65,12 @@ function EditDebtModal({ debt, onSave, onClose }) {
       tipo_presupuesto: debt.tipo_presupuesto || 'OBLIGATION',
       tipo_flujo: debt.tipo_flujo || 'Ingreso',
       expense_type: debt.expense_type || 'VARIABLE',
-      estimated_payment: (debt.estimated_payment != null ? debt.estimated_payment : debt.monto_total || '').toString(),
-      monto_ejecutado: (debt.monto_ejecutado || debt.monto_pagado || 0).toString(),
+      estimated_payment: formatArNumber(
+        debt.estimated_payment != null ? debt.estimated_payment : debt.monto_total || 0
+      ),
+      monto_ejecutado: formatArNumber(debt.monto_ejecutado || debt.monto_pagado || 0),
       installment_mode: debt.installment_mode || 'FIXED',
-      base_salary: debt.base_salary != null ? String(debt.base_salary) : '',
+      base_salary: debt.base_salary != null ? formatArNumber(debt.base_salary) : '',
       installment_salary_percent: debt.installment_salary_percent != null ? String(debt.installment_salary_percent) : '',
       salary_increase_percent: debt.salary_increase_percent != null ? String(debt.salary_increase_percent) : '',
       salary_increase_interval_months: debt.salary_increase_interval_months != null ? String(debt.salary_increase_interval_months) : '',
@@ -102,9 +105,18 @@ function EditDebtModal({ debt, onSave, onClose }) {
     }));
   };
 
+  const handleBlur = (e) => {
+    const { name, value } = e.target;
+    if (!AMOUNT_FIELD_NAMES.has(name)) return;
+    setFormData((prev) => ({
+      ...prev,
+      [name]: formatAmountInputOnBlur(value),
+    }));
+  };
+
   const toNullableNumber = (value) => {
     if (value === '' || value === null || value === undefined) return null;
-    const parsed = Number(value);
+    const parsed = parseArNumber(value);
     return Number.isFinite(parsed) ? parsed : null;
   };
 
@@ -115,7 +127,8 @@ function EditDebtModal({ debt, onSave, onClose }) {
       return;
     }
 
-    if (!formData.monto_total || parseFloat(formData.monto_total) <= 0) {
+    const montoTotal = parseArNumber(formData.monto_total);
+    if (!Number.isFinite(montoTotal) || montoTotal <= 0) {
       return;
     }
 
@@ -127,14 +140,16 @@ function EditDebtModal({ debt, onSave, onClose }) {
 
     onSave({
       ...formData,
-      monto_total: parseFloat(formData.monto_total),
+      monto_total: montoTotal,
       annual_interest_rate: toNullableNumber(formData.annual_interest_rate),
       interest_vat_rate: toNullableNumber(formData.interest_vat_rate) ?? 21,
       total_installments: totalInstallments,
       current_installment: currentInstallment,
       pending_installments: toNullableNumber(formData.pending_installments),
-      monto_ejecutado: parseFloat(formData.monto_ejecutado),
-      estimated_payment: formData.estimated_payment ? parseFloat(formData.estimated_payment) : parseFloat(formData.monto_total),
+      monto_ejecutado: parseArNumber(formData.monto_ejecutado),
+      estimated_payment: formData.estimated_payment
+        ? parseArNumber(formData.estimated_payment)
+        : montoTotal,
       installment_mode: formData.installment_mode || 'FIXED',
       base_salary: toNullableNumber(formData.base_salary),
       installment_salary_percent: toNullableNumber(formData.installment_salary_percent),
@@ -245,12 +260,12 @@ function EditDebtModal({ debt, onSave, onClose }) {
             <div>
               <label className="block text-sm font-medium text-finly-text mb-2">Monto total *</label>
               <input
-                type="number"
+                type="text"
+                inputMode="decimal"
                 name="monto_total"
                 value={formData.monto_total}
                 onChange={handleChange}
-                step="0.01"
-                min="0"
+                onBlur={handleBlur}
                 required
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-finly-primary focus:border-transparent transition-all"
               />
@@ -326,12 +341,12 @@ function EditDebtModal({ debt, onSave, onClose }) {
             <div>
               <label className="block text-sm font-medium text-finly-text mb-2">Monto a pagar</label>
               <input
-                type="number"
+                type="text"
+                inputMode="decimal"
                 name="estimated_payment"
                 value={formData.estimated_payment}
                 onChange={handleChange}
-                step="0.01"
-                min="0"
+                onBlur={handleBlur}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-finly-primary focus:border-transparent transition-all"
               />
             </div>
@@ -339,7 +354,8 @@ function EditDebtModal({ debt, onSave, onClose }) {
             <div>
               <label className="block text-sm font-medium text-finly-text mb-2">Monto ejecutado (Read-only)</label>
               <input
-                type="number"
+                type="text"
+                inputMode="decimal"
                 name="monto_ejecutado"
                 value={formData.monto_ejecutado}
                 readOnly
@@ -367,12 +383,12 @@ function EditDebtModal({ debt, onSave, onClose }) {
                 <div>
                   <label className="block text-sm font-medium text-finly-text mb-2">Sueldo base inicial (ARS)</label>
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     name="base_salary"
                     value={formData.base_salary}
                     onChange={handleChange}
-                    step="0.01"
-                    min="0"
+                    onBlur={handleBlur}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-finly-primary focus:border-transparent transition-all"
                   />
                 </div>
